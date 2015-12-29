@@ -67,7 +67,7 @@ namespace ConquestRelay
     {
       foreach (Relay relay in relays)
       {
-        if ((relay.State == WebSocketSharp.WebSocketState.Open) && (relay.relayID == guid))
+        if (relay.relayID == guid)
         {
           return relay;
         }
@@ -121,15 +121,31 @@ namespace ConquestRelay
       }
     }
 
-    public void RemoveRelay(Relay relay)
+    public void ExchangeRelays(Relay oldRelay, Relay newRelay)
     {
-      if (relay.GetGameType() == Relay.GameType.Client)
+      if (oldRelay.myServer != null && (oldRelay.myServer.GetGameType() == Relay.GameType.Server) && sessions.ContainsKey(oldRelay.myServer.relayID))
+      {
+        sessions[oldRelay.myServer.relayID].RemoveClient(oldRelay);
+        sessions[oldRelay.myServer.relayID].AddClient(newRelay);
+      }
+      // remove relay, but do not disconnect the client from the server; the server shall continue to think that the client is still there
+      relays.Remove(oldRelay); 
+      //AddRelay(newRelay);
+    }
+
+    public void RemoveRelay(Relay relay, bool disconnect = true)
+    {
+      if ((relay.GetGameType() == Relay.GameType.Client) && (relay.myServer != null))
       {
         Guid serverID = relay.myServer.relayID;
         if (sessions.ContainsKey(serverID))
         {
           sessions[serverID].RemoveClient(relay);
-          relay.myServer.DisconnectClient(relay.GetName());
+          // only disconnect from server if necessary
+          if (disconnect)
+          {
+            relay.myServer.DisconnectClient(relay.relayID);
+          }
         }
       }
       else if (relay.GetGameType() == Relay.GameType.Server)

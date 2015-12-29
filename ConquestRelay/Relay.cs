@@ -48,6 +48,7 @@ namespace ConquestRelay
 
     private string     name;
     private static int number = 0;
+    private int myNumber;
     public Guid relayID { get; private set; }
     private GameType gameType = GameType.Unknown;
     public Relay myServer { get; set; }
@@ -55,6 +56,8 @@ namespace ConquestRelay
     public Relay()
     {
       relayID = Guid.NewGuid();
+      myNumber = GetNumber();
+      Console.WriteLine("Relay {0} created", myNumber);
     }
 
     public string GetQueryName()
@@ -86,12 +89,12 @@ namespace ConquestRelay
       Send("ChangeName " + newName);
     }
 
-    public void DisconnectClient(string clientName)
+    public void DisconnectClient(Guid clientID)
     {
       if (gameType == GameType.Server)
       {
-        Console.WriteLine("Disconnecting client {0} from server {1}", clientName, name);
-        Send("Disconnect " + relayID.ToString());
+        Console.WriteLine("Disconnecting client {0} from server {1}", clientID, relayID);
+        Send("Disconnect " + clientID);
       }
       else
       {
@@ -114,6 +117,7 @@ namespace ConquestRelay
 
     public void SendMessage(string message)
     {
+      Console.WriteLine("Sending message on Relay {0}", myNumber);
       Send(message);
     }
 
@@ -152,21 +156,55 @@ namespace ConquestRelay
       if (e.Type == Opcode.Text)
       {
         // determine role of connecting client (server or client) or handle request for list of servers
-        switch (e.Data)
+        if (e.Data.StartsWith("Server", StringComparison.Ordinal))
         {
-          case "Server": 
-            gameType = GameType.Server;
-            RelayManager.instance.CreateGameSession(this);
-            Send("ServerID " + relayID.ToString());
-            Send("SessionID " + RelayManager.instance.GetSessionID(relayID));
-            return;
-          case "Client":
-            gameType = GameType.Client;
+          gameType = GameType.Server;
+          RelayManager.instance.CreateGameSession(this);
+          Send("ServerID " + relayID.ToString());
+          Send("SessionID " + RelayManager.instance.GetSessionID(relayID));
+          return;
+        }
+        if (e.Data.StartsWith("Client", StringComparison.Ordinal))
+        {
+          gameType = GameType.Client;
+          // new connection?
+          if (e.Data == "Client")
+          {
             Send("ClientID " + relayID.ToString());
-            return;
-          case "RequestServerList":
-            SendSessionList();
-            return;
+          }
+          // in case of a reconnect search for the existing relay and use its ID
+          else
+          {
+            Guid oldClientID;
+            try
+            {
+              oldClientID = new Guid(e.Data.Replace("Client ", ""));
+              Console.WriteLine("Reconnecting: {0}", oldClientID.ToString());
+            }
+            catch (FormatException exc)
+            {
+              Console.WriteLine("{0}: {1}", exc.Message, e.Data);
+              Send("Reconnect failed");
+              return;
+            }
+            if (oldClientID != Guid.Empty)
+            {
+              Relay oldRelay = RelayManager.instance.GetRelay(oldClientID);
+              if (oldRelay != null)
+              {
+                relayID = oldClientID;
+                myServer = oldRelay.myServer;
+                RelayManager.instance.ExchangeRelays(oldRelay, this);
+                Send("Reconnect successful");
+              }
+            }
+          }
+          return;
+        }
+        if (e.Data.StartsWith("RequestServerList", StringComparison.Ordinal))
+        {
+          SendSessionList();
+          return;
         }
 
         // connection request by a client
@@ -225,7 +263,10 @@ namespace ConquestRelay
     protected override void OnClose(CloseEventArgs e)
     {
       Console.WriteLine("Client {0} has closed its connection", name);
-      RelayManager.instance.RemoveRelay(this);
+
+      // do not remove relay of a disconnected player (which sends a disconnect client message to the server)
+      // when a client disconnects, as it might try to reconnect later
+      //RelayManager.instance.RemoveRelay(this);
       //Sessions.Broadcast (String.Format ("{0} got logged off...", name));
     }
   }
